@@ -1,8 +1,4 @@
 ﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
 
 namespace DotNetCore.Messaging
 {
@@ -12,15 +8,12 @@ namespace DotNetCore.Messaging
         public string Exchange { get; }
         public string RoutingKey { get; }
         public string Queue { get; }
-        public bool External { get; }
 
-        public MessageAttribute(string exchange = null, string routingKey = null, string queue = null,
-            bool external = false)
+        public MessageAttribute(string exchange = null, string routingKey = null, string queue = null)
         {
             Exchange = exchange;
             RoutingKey = routingKey;
             Queue = queue;
-            External = external;
         }
     }
 }

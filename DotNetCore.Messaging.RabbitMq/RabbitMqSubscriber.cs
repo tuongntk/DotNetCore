@@ -4,7 +4,6 @@ using System.Text;
 using System.Text.Json;
 using System.Threading.Tasks;
 using DotNetCore.Messaging.RabbitMq.Configurations;
-using DotNetCore.Messaging.RabbitMq.Exceptions;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Polly;
@@ -135,19 +134,7 @@ namespace DotNetCore.Messaging.RabbitMq
 
                     _logger.LogInformation(preLogMessage);
 
-                    if (_options.MessageProcessingTimeout.HasValue)
-                    {
-                        var task = handle(_serviceProvider, message);
-                        var result = await Task.WhenAny(task, Task.Delay(_options.MessageProcessingTimeout.Value));
-                        if (result != task)
-                        {
-                            throw new RabbitMqMessageProcessingTimeoutException(messageId);
-                        }
-                    }
-                    else
-                    {
-                        await handle(_serviceProvider, message);
-                    }
+                    await handle(_serviceProvider, message);
 
                     channel.BasicAck(args.DeliveryTag, false);
                     await Task.Yield();
@@ -158,13 +145,6 @@ namespace DotNetCore.Messaging.RabbitMq
                 catch (Exception ex)
                 {
                     _logger.LogError(ex, ex.Message);
-
-                    if (ex is RabbitMqMessageProcessingTimeoutException)
-                    {
-                        channel.BasicNack(args.DeliveryTag, false, _requeueFailedMessages);
-                        await Task.Yield();
-                        return;
-                    }
 
                     currentRetry++;
                     var errorMessage = $"Unable to handle a message: '{messageName}' [id: '{messageId}'] " +

@@ -2,86 +2,81 @@
 using Microsoft.Extensions.DependencyInjection;
 using RabbitMQ.Client;
 using System;
-using System.Collections.Generic;
 using System.Linq;
-using System.Text;
-using DotNetCore.Extensions;
 using Microsoft.Extensions.Logging;
 using DotNetCore.Messaging.RabbitMq.Internals;
 using Microsoft.AspNetCore.Builder;
+using System.Reflection;
 
 namespace DotNetCore.Messaging.RabbitMq
 {
     public static class DependencyInjection
     {
-        private const string SectionName = "rabbitmq";
-        private const string RegistryName = "messageBrokers.rabbitmq";
-
-        public static IAppBuilder AddRabbitMq(this IAppBuilder builder, string sectionName = SectionName,
-            Action<ConnectionFactory> connectionFactoryConfigurator = null)
+        public static IServiceCollection AddRabbitMq(this IServiceCollection services, RabbitMqOptions rabbitMqOptions)
         {
-            if (string.IsNullOrWhiteSpace(sectionName))
+            if (string.IsNullOrEmpty(rabbitMqOptions.ConnectionString))
             {
-                sectionName = SectionName;
+                throw new ArgumentException("RabbitMq connection string is not specified.", nameof(rabbitMqOptions.ConnectionString));
             }
 
-            var options = builder.GetOptions<RabbitMqOptions>(sectionName);
-            builder.Services.AddSingleton(options);
-
-            if (!builder.TryRegister(RegistryName))
-            {
-                return builder;
-            }
-
-            if (options.HostNames is null || !options.HostNames.Any())
-            {
-                throw new ArgumentException("RabbitMQ hostnames are not specified.", nameof(options.HostNames));
-            }
-
+            services.AddSingleton(rabbitMqOptions);
 
             ILogger<IRabbitMqClient> logger;
-            using (var serviceProvider = builder.Services.BuildServiceProvider())
-            {
-                logger = serviceProvider.GetService<ILogger<IRabbitMqClient>>();
-            }
+            using var serviceProvider = services.BuildServiceProvider();
+            logger = serviceProvider.GetService<ILogger<IRabbitMqClient>>();
 
-            builder.Services.AddSingleton<IRabbitMqClient, RabbitMqClient>();
-            builder.Services.AddSingleton<IBusPublisher, RabbitMqPublisher>();
-            builder.Services.AddSingleton<IBusSubscriber, RabbitMqSubscriber>();
-            builder.Services.AddTransient<RabbitMqExchangeInitializer>();
-            builder.Services.AddHostedService<RabbitMqHostedService>();
-
-            builder.AddInitializer<RabbitMqExchangeInitializer>();
+            services.AddSingleton<IRabbitMqClient, RabbitMqClient>();
+            services.AddSingleton<IBusPublisher, RabbitMqPublisher>();
+            services.AddSingleton<IBusSubscriber, RabbitMqSubscriber>();
+            
+            services.AddHostedService<RabbitMqHostedService>();
 
             var connectionFactory = new ConnectionFactory
             {
-                Port = options.Port,
-                VirtualHost = options.VirtualHost,
-                UserName = options.Username,
-                Password = options.Password,
-                RequestedHeartbeat = options.RequestedHeartbeat,
-                RequestedConnectionTimeout = options.RequestedConnectionTimeout,
-                SocketReadTimeout = options.SocketReadTimeout,
-                SocketWriteTimeout = options.SocketWriteTimeout,
-                RequestedChannelMax = options.RequestedChannelMax,
-                RequestedFrameMax = options.RequestedFrameMax,
-                UseBackgroundThreadsForIO = options.UseBackgroundThreadsForIO,
-                DispatchConsumersAsync = true,
-                ContinuationTimeout = options.ContinuationTimeout,
-                HandshakeContinuationTimeout = options.HandshakeContinuationTimeout,
-                NetworkRecoveryInterval = options.NetworkRecoveryInterval
+                Uri = new Uri(rabbitMqOptions.ConnectionString),
+                RequestedChannelMax = rabbitMqOptions.RequestedChannelMax,
+                DispatchConsumersAsync = true
             };
 
-            connectionFactoryConfigurator?.Invoke(connectionFactory);
+            var connection = connectionFactory.CreateConnection();
+            services.AddSingleton(connection);
 
-            var connection = connectionFactory.CreateConnection(options.HostNames.ToList(), options.ConnectionName);
-            builder.Services.AddSingleton(connection);
+            ExchangeDeclare(connection, rabbitMqOptions);
 
-            return builder;
+            return services;
         }
 
 
-        public static IBusSubscriber UseRabbitMq(this IApplicationBuilder app)
-            => new RabbitMqSubscriber(app.ApplicationServices);
+        private static void ExchangeDeclare(IConnection connection, RabbitMqOptions rabbitMqOptions)
+        {
+            var exchanges = AppDomain.CurrentDomain
+                .GetAssemblies()
+                .SelectMany(a => a.GetTypes())
+                .Where(t => t.IsDefined(typeof(MessageAttribute), false))
+                .Select(t => t.GetCustomAttribute<MessageAttribute>().Exchange)
+                .Distinct()
+                .ToList();
+
+            using var channel = connection.CreateModel();
+
+            if (rabbitMqOptions.Exchange?.Declare == true)
+            {
+                channel.ExchangeDeclare(rabbitMqOptions.Exchange.Name, rabbitMqOptions.Exchange.Type, rabbitMqOptions.Exchange.Durable, rabbitMqOptions.Exchange.AutoDelete);
+            }
+
+            foreach (var exchange in exchanges)
+            {
+                if (exchange.Equals(rabbitMqOptions.Exchange?.Name, StringComparison.InvariantCultureIgnoreCase))
+                {
+                    continue;
+                }
+
+                channel.ExchangeDeclare(exchange, "topic", true);
+            }
+
+            channel.Close();
+        }
+
+        public static IBusSubscriber UseRabbitMq(this IApplicationBuilder app) => new RabbitMqSubscriber(app.ApplicationServices);
     }
 }

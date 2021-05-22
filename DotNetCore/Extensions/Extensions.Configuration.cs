@@ -12,13 +12,5 @@ namespace DotNetCore.Extensions
             configuration.GetSection(sectionName).Bind(model);
             return model;
         }
-
-        public static TModel GetOptions<TModel>(this IAppBuilder builder, string settingsSectionName)
-            where TModel : new()
-        {
-            using var serviceProvider = builder.Services.BuildServiceProvider();
-            var configuration = serviceProvider.GetService<IConfiguration>();
-            return configuration.GetOptions<TModel>(settingsSectionName);
-        }
     }
 }
